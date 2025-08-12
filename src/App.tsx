@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { Button } from './components/ui/button';
@@ -93,7 +93,69 @@ const COUNTRY_LIFE_EXPECTANCY: LifeExpectancyByCountry = {
   'United Kingdom': { male: 79.8, female: 83.4 },
   'Germany': { male: 78.9, female: 83.6 },
   'United States': { male: 76.4, female: 81.2 },
-  'China': { male: 75.0, female: 79.9 }
+  'China': { male: 75.0, female: 79.9 },
+  'Monaco': { male: 85.2, female: 89.4 },
+  'San Marino': { male: 83.1, female: 86.2 },
+  'Hong Kong': { male: 82.3, female: 88.1 },
+  'Andorra': { male: 80.9, female: 84.8 },
+  'Luxembourg': { male: 80.1, female: 84.9 },
+  'Slovenia': { male: 79.0, female: 84.3 },
+  'Malta': { male: 80.9, female: 84.3 },
+  'Ireland': { male: 80.5, female: 84.1 },
+  'Cyprus': { male: 79.1, female: 83.9 },
+  'Austria': { male: 79.4, female: 84.0 },
+  'Finland': { male: 79.7, female: 84.5 },
+  'Greece': { male: 79.0, female: 84.2 },
+  'Belgium': { male: 79.8, female: 84.2 },
+  'Portugal': { male: 78.7, female: 84.6 },
+  'Denmark': { male: 79.0, female: 82.9 },
+  'Poland': { male: 74.1, female: 82.1 },
+  'Czech Republic': { male: 76.4, female: 82.2 },
+  'Estonia': { male: 74.4, female: 83.0 },
+  'Chile': { male: 77.9, female: 83.4 },
+  'Costa Rica': { male: 77.8, female: 82.6 },
+  'Slovakia': { male: 73.9, female: 81.0 },
+  'Uruguay': { male: 74.4, female: 81.2 },
+  'Croatia': { male: 75.7, female: 82.2 },
+  'Latvia': { male: 70.9, female: 80.5 },
+  'Lithuania': { male: 70.2, female: 81.2 },
+  'Hungary': { male: 73.0, female: 79.3 },
+  'Romania': { male: 72.3, female: 79.7 },
+  'Bulgaria': { male: 71.9, female: 78.8 },
+  'Panama': { male: 75.8, female: 81.6 },
+  'Argentina': { male: 73.2, female: 79.8 },
+  'Mexico': { male: 72.1, female: 77.8 },
+  'Brazil': { male: 72.8, female: 79.9 },
+  'Colombia': { male: 73.8, female: 80.0 },
+  'Peru': { male: 73.0, female: 78.3 },
+  'Ecuador': { male: 74.5, female: 80.0 },
+  'Venezuela': { male: 69.8, female: 77.7 },
+  'Turkey': { male: 76.3, female: 81.4 },
+  'Russian Federation': { male: 66.5, female: 77.6 },
+  'Belarus': { male: 69.9, female: 79.4 },
+  'Ukraine': { male: 67.7, female: 77.8 },
+  'Kazakhstan': { male: 67.4, female: 76.4 },
+  'Thailand': { male: 72.4, female: 79.7 },
+  'Malaysia': { male: 74.1, female: 78.6 },
+  'Iran, Islamic Republic of': { male: 75.4, female: 78.0 },
+  'Vietnam': { male: 71.7, female: 80.9 },
+  'Philippines': { male: 67.5, female: 75.5 },
+  'Indonesia': { male: 69.1, female: 73.3 },
+  'India': { male: 68.2, female: 70.3 },
+  'Bangladesh': { male: 70.6, female: 74.2 },
+  'Pakistan': { male: 66.1, female: 68.0 },
+  'Egypt': { male: 69.6, female: 74.3 },
+  'Morocco': { male: 74.0, female: 77.4 },
+  'Tunisia': { male: 74.2, female: 78.7 },
+  'South Africa': { male: 62.3, female: 67.5 },
+  'Kenya': { male: 62.2, female: 67.1 },
+  'Ethiopia': { male: 64.9, female: 68.9 },
+  'Nigeria': { male: 52.7, female: 54.7 },
+  'Ghana': { male: 62.4, female: 64.2 },
+  'Botswana': { male: 66.7, female: 71.8 },
+  'Mauritius': { male: 71.9, female: 78.3 },
+  'Rwanda': { male: 67.3, female: 71.8 },
+  'Algeria': { male: 75.6, female: 78.3 }
 } as const;
 
 // Initial state values
@@ -111,6 +173,26 @@ const INITIAL_FORM_DATA: FormData = {
   fitnessLevel: '',
   dietRating: ''
 };
+
+type PredictionMode = 'rule' | 'who' | 'ml';
+type MLStatus = 'idle' | 'loading' | 'ready' | 'error';
+type UsedModel = 'rule' | 'who' | 'ml';
+
+// TensorFlow.js types
+interface TFModel {
+  predict: (input: any) => any;
+}
+
+interface ModelInput {
+  age: number;
+  sex: number; // 0: male, 1: female
+  bmi: number;
+  smoker: number; // 0: no, 1: yes
+  alcoholLevel: number; // 0-5 scale
+  outlookLevel: number; // 0-2 scale
+  fitnessLevel: number; // 0-3 scale
+  dietLevel: number; // 0-3 scale
+}
 
 const INITIAL_BMI_DATA: BMIData = {
   weightUnit: '',
@@ -145,6 +227,162 @@ const INITIAL_COUNTDOWN_TIME: CountdownTime = {
   approximateYears: 0
 };
 
+async function computeExpectedYears(
+  formData: FormData,
+  predictionMode: PredictionMode,
+  lifeExpectancyData: LifeExpectancyByCountry,
+  currentAge: number,
+  calculatedBMI: number | null,
+  prepareModelInput: (formData: FormData, currentAge: number, calculatedBMI: number | null) => ModelInput,
+  predictWithModel: (modelInput: ModelInput) => Promise<number | null>
+): Promise<{ years: number; usedModel: UsedModel }> {
+  let baseLifeExpectancy = 78;
+  let usedModel: UsedModel = predictionMode;
+  
+  if (predictionMode === 'rule') {
+    usedModel = 'rule';
+    const countryData = lifeExpectancyData[formData.country];
+    if (countryData) {
+      baseLifeExpectancy = formData.sex === 'female' ? countryData.female : countryData.male;
+    } else {
+      if (formData.sex === 'female') baseLifeExpectancy += 4;
+    }
+  } else if (predictionMode === 'who') {
+    usedModel = 'who';
+    const countryData = lifeExpectancyData[formData.country];
+    if (countryData) {
+      baseLifeExpectancy = formData.sex === 'female' ? countryData.female : countryData.male;
+    } else {
+      baseLifeExpectancy = 100;
+    }
+  } else if (predictionMode === 'ml') {
+    try {
+      // Use TensorFlow.js model prediction
+      const modelInput = prepareModelInput(formData, currentAge, calculatedBMI);
+      const prediction = await predictWithModel(modelInput);
+      if (prediction !== null) {
+        baseLifeExpectancy = prediction;
+        usedModel = 'ml';
+      } else {
+        throw new Error('Model prediction returned null');
+      }
+    } catch (error) {
+      console.error('ML prediction failed, falling back to WHO method:', error);
+      // Fallback to WHO method if ML fails
+      usedModel = 'who';
+      const countryData = lifeExpectancyData[formData.country];
+      if (countryData) {
+        baseLifeExpectancy = formData.sex === 'female' ? countryData.female : countryData.male;
+      } else {
+        baseLifeExpectancy = 100;
+      }
+    }
+  }
+  
+  const ageAdjustment = currentAge * 0.1;
+  baseLifeExpectancy -= ageAdjustment;
+  
+  // --- BMI handling: use calculated BMI if available; otherwise map category to a midpoint ---
+  const bmiFromCategory = (() => {
+    switch (formData.bmi) {
+      case 'under18.5': return 17;      // midpoint proxy
+      case '18.5-24.9': return 22;      // normal range midpoint
+      case '25-29.9':   return 27;      // overweight midpoint
+      case '30-34.9':   return 32;      // obese class I midpoint
+      case '35+':       return 37;      // obese class II+ proxy
+      default:          return null;
+    }
+  })();
+
+  const bmiToUse = (typeof calculatedBMI === 'number' ? calculatedBMI : bmiFromCategory);
+  if (bmiToUse !== null) {
+    if (bmiToUse < 16) baseLifeExpectancy -= 8;
+    else if (bmiToUse < 18.5) baseLifeExpectancy -= 3;
+    else if (bmiToUse < 25) baseLifeExpectancy += 2;
+    else if (bmiToUse < 30) baseLifeExpectancy -= 2;
+    else if (bmiToUse < 35) baseLifeExpectancy -= 6;
+    else if (bmiToUse < 40) baseLifeExpectancy -= 10;
+    else baseLifeExpectancy -= 15;
+  }
+  
+  if (formData.smoker) {
+    if (formData.sex === 'male') baseLifeExpectancy -= 13.2;
+    else baseLifeExpectancy -= 14.5;
+  }
+  
+  switch (formData.alcoholConsumption) {
+    case 'never':
+      baseLifeExpectancy += 0.5;
+      break;
+    case 'once-a-month':
+      baseLifeExpectancy += 1;
+      break;
+    case '2-4-times-per-month':
+      baseLifeExpectancy += 0.5;
+      break;
+    case '2-times-a-week':
+      baseLifeExpectancy -= 1;
+      break;
+    case 'daily':
+      baseLifeExpectancy -= 5;
+      break;
+    case 'constantly-blotto':
+      baseLifeExpectancy -= 15;
+      break;
+  }
+  
+  switch (formData.outlook) {
+    case 'optimistic':
+      baseLifeExpectancy += 2;
+      break;
+    case 'pessimistic':
+      baseLifeExpectancy -= 3;
+      break;
+    case 'neutral':
+      break;
+  }
+  
+  if (formData.includeFitnessDiet) {
+    switch (formData.fitnessLevel) {
+      case 'ironman':
+        baseLifeExpectancy += 8;
+        break;
+      case 'very-active':
+        baseLifeExpectancy += 5;
+        break;
+      case 'moderately-active':
+        baseLifeExpectancy += 3;
+        break;
+      case 'couch-potato':
+        baseLifeExpectancy -= 4;
+        break;
+    }
+    
+    switch (formData.dietRating) {
+      case 'excellent':
+        baseLifeExpectancy += 4;
+        break;
+      case 'good':
+        baseLifeExpectancy += 2;
+        break;
+      case 'ok':
+        baseLifeExpectancy += 0;
+        break;
+      case 'terrible':
+        baseLifeExpectancy -= 3;
+        break;
+    }
+  }
+  
+  const randomFactor = (Math.random() - 0.5) * 4;
+  baseLifeExpectancy += randomFactor;
+  
+  return { years: currentAge + Math.max(0, baseLifeExpectancy - currentAge), usedModel };
+}
+
+// TensorFlow.js model URL constant
+const TFJS_MODEL_URL = '/seer/model/model.json';
+
 export default function App() {
   const [formData, setFormData] = useState<FormData>(INITIAL_FORM_DATA);
   const [bmiData, setBmiData] = useState<BMIData>(INITIAL_BMI_DATA);
@@ -153,23 +391,160 @@ export default function App() {
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [deathResults, setDeathResults] = useState<DeathResults>(INITIAL_DEATH_RESULTS);
   const [currentTime, setCurrentTime] = useState<CountdownTime>(INITIAL_COUNTDOWN_TIME);
+  const [predictionMode, setPredictionMode] = useState<PredictionMode>('who');
+  const [mlStatus, setMlStatus] = useState<MLStatus>('idle');
+  const [usedModelState, setUsedModelState] = useState<UsedModel>('who');
+  
+  // TF.js model reference
+  const tfModelRef = useRef<TFModel | null>(null);
+  const modelLoadPromiseRef = useRef<Promise<TFModel | null> | null>(null);
 
-  // Memoized computed values
-  const days = useMemo(() => Array.from({ length: 31 }, (_, i) => i + 1), []);
-  const thisYear = useMemo(() => new Date().getFullYear(), []);
-  const years = useMemo(() => Array.from({ length: 100 }, (_, i) => thisYear - i), [thisYear]);
+  // Load TensorFlow.js model (lazy loading)
+  const loadTFModel = useCallback(async (): Promise<TFModel | null> => {
+    if (tfModelRef.current) {
+      return tfModelRef.current;
+    }
+    
+    if (modelLoadPromiseRef.current) {
+      return modelLoadPromiseRef.current;
+    }
+    
+    modelLoadPromiseRef.current = (async () => {
+      try {
+        setMlStatus('loading');
+        console.log('Loading TensorFlow.js model...');
+        
+        // Dynamic import to avoid loading TF.js unless needed
+        const tf = await import('@tensorflow/tfjs');
+        
+        // Load the model using the constant
+        const model = await tf.loadLayersModel(TFJS_MODEL_URL);
+        
+        const wrappedModel: TFModel = {
+          predict: (input: any) => model.predict(input)
+        };
+        
+        tfModelRef.current = wrappedModel;
+        setMlStatus('ready');
+        console.log('TensorFlow.js model loaded successfully');
+        return wrappedModel;
+      } catch (error) {
+        setMlStatus('error');
+        console.error('Failed to load TensorFlow.js model:', error);
+        console.warn('Falling back to WHO + Rules method for life expectancy calculation');
+        return null;
+      }
+    })();
+    
+    return modelLoadPromiseRef.current;
+  }, []);
 
-  // Check if all required fields are filled
-  const isFormValid = useMemo(() => {
-    return (
-      formData.birthDay !== '' &&
-      formData.birthMonth !== '' &&
-      formData.birthYear !== '' &&
-      formData.sex !== '' &&
-      formData.country !== '' &&
-      (formData.bmi !== '' || calculatedBMI !== null)
-    );
-  }, [formData.birthDay, formData.birthMonth, formData.birthYear, formData.sex, formData.country, formData.bmi, calculatedBMI]);
+  // Convert form data to model input
+  const prepareModelInput = useCallback((formData: FormData, currentAge: number, calculatedBMI: number | null): ModelInput => {
+    const bmiFromCategory = (() => {
+      switch (formData.bmi) {
+        case 'under18.5': return 17;
+        case '18.5-24.9': return 22;
+        case '25-29.9': return 27;
+        case '30-34.9': return 32;
+        case '35+': return 37;
+        default: return null;
+      }
+    })();
+    
+    const bmiToUse = calculatedBMI || bmiFromCategory || 22;
+    
+    const alcoholLevel = (() => {
+      switch (formData.alcoholConsumption) {
+        case 'never': return 0;
+        case 'once-a-month': return 1;
+        case '2-4-times-per-month': return 2;
+        case '2-times-a-week': return 3;
+        case 'daily': return 4;
+        case 'constantly-blotto': return 5;
+        default: return 0;
+      }
+    })();
+    
+    const outlookLevel = (() => {
+      switch (formData.outlook) {
+        case 'optimistic': return 2;
+        case 'neutral': return 1;
+        case 'pessimistic': return 0;
+        default: return 1;
+      }
+    })();
+    
+    const fitnessLevel = (() => {
+      if (!formData.includeFitnessDiet) return 1; // default moderate
+      switch (formData.fitnessLevel) {
+        case 'couch-potato': return 0;
+        case 'moderately-active': return 1;
+        case 'very-active': return 2;
+        case 'ironman': return 3;
+        default: return 1;
+      }
+    })();
+    
+    const dietLevel = (() => {
+      if (!formData.includeFitnessDiet) return 1; // default ok
+      switch (formData.dietRating) {
+        case 'terrible': return 0;
+        case 'ok': return 1;
+        case 'good': return 2;
+        case 'excellent': return 3;
+        default: return 1;
+      }
+    })();
+    
+    return {
+      age: currentAge,
+      sex: formData.sex === 'female' ? 1 : 0,
+      bmi: bmiToUse,
+      smoker: formData.smoker ? 1 : 0,
+      alcoholLevel,
+      outlookLevel,
+      fitnessLevel,
+      dietLevel
+    };
+  }, []);
+
+  // Predict with TensorFlow.js model
+  const predictWithModel = useCallback(async (modelInput: ModelInput): Promise<number | null> => {
+    try {
+      const model = await loadTFModel();
+      if (!model) return null;
+      
+      const tf = await import('@tensorflow/tfjs');
+      
+      // Create input tensor
+      const inputTensor = tf.tensor2d([[
+        modelInput.age,
+        modelInput.sex,
+        modelInput.bmi,
+        modelInput.smoker,
+        modelInput.alcoholLevel,
+        modelInput.outlookLevel,
+        modelInput.fitnessLevel,
+        modelInput.dietLevel
+      ]]);
+      
+      // Make prediction
+      const prediction = model.predict(inputTensor) as any;
+      const result = await prediction.data();
+      
+      // Cleanup tensors
+      inputTensor.dispose();
+      prediction.dispose();
+      
+      // Return predicted life expectancy
+      return result[0];
+    } catch (error) {
+      console.error('Model prediction failed:', error);
+      return null;
+    }
+  }, [loadTFModel]);
+
 
   const calculateBMI = useCallback(() => {
     const weight = parseFloat(bmiData.weightValue);
@@ -192,10 +567,70 @@ export default function App() {
 
     const bmi = weightInKg / (heightInM * heightInM);
     setCalculatedBMI(Math.round(bmi * 10) / 10);
-  }, [bmiData.weightValue, bmiData.heightValue, bmiData.weightUnit, bmiData.heightUnit]);
+  }, [bmiData]);
+
+  // Memoize form validation
+  const isFormValid = useMemo(() => {
+    return (
+      formData.birthDay &&
+      formData.birthMonth &&
+      formData.birthYear &&
+      formData.sex &&
+      formData.bmi &&
+      formData.outlook &&
+      formData.alcoholConsumption &&
+      formData.country
+    );
+  }, [formData]);
+
+  // Memoize years array
+  const years = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    return Array.from({ length: 101 }, (_, i) => currentYear - i);
+  }, []);
+
+  // Memoize days array based on selected month and year
+  const days = useMemo(() => {
+    const getDaysInMonth = (month: number, year: number) => {
+      return new Date(year, month, 0).getDate();
+    };
+    
+    const month = parseInt(formData.birthMonth) || 1;
+    const year = parseInt(formData.birthYear) || new Date().getFullYear();
+    
+    return Array.from(
+      { length: getDaysInMonth(month, year) }, 
+      (_, i) => i + 1
+    );
+  }, [formData.birthMonth, formData.birthYear]);
+
+  // Memoize ML status display
+  const mlStatusDisplay = useMemo(() => {
+    if (predictionMode !== 'ml') return null;
+    
+    switch (mlStatus) {
+      case 'loading':
+        return { text: 'Loading ML model…', color: 'text-blue-400' };
+      case 'ready':
+        return { text: 'ML model ready ✅', color: 'text-green-400' };
+      case 'error':
+        return { text: 'Falling back to WHO rules.', color: 'text-orange-400' };
+      default:
+        return null;
+    }
+  }, [predictionMode, mlStatus]);
+
+  // Memoize model display name
+  const modelDisplayName = useMemo(() => {
+    switch (usedModelState) {
+      case 'ml': return 'Machine Learning';
+      case 'who': return 'WHO + Rules';
+      case 'rule': return 'Rule-based';
+    }
+  }, [usedModelState]);
 
   const handleInstagramShare = useCallback(async () => {
-    const shareText = `🔮 Death Clock Results 💀\n\nI will live to be ${deathResults.lifeExpectancy} old!\n\nPredicted death date: ${deathResults.deathDate}\n\nTime remaining: ${currentTime.approximateYears} years\n\n#DeathClock #LifeExpectancy`;
+    const shareText = `🔮 Death Clock Results 💀\n\nI will live to be ${deathResults.lifeExpectancy} old!\n\nPredicted death date: ${deathResults.deathDate}\n\nTime remaining: ${currentTime.approximateYears} years\nModel: ${usedModelState.toUpperCase()}\n\n#DeathClock #LifeExpectancy`;
     
     if (navigator.share) {
       try {
@@ -213,7 +648,7 @@ export default function App() {
       // Fallback for desktop browsers
       fallbackShare(shareText);
     }
-  }, [deathResults.lifeExpectancy, deathResults.deathDate, currentTime.approximateYears]);
+  }, [deathResults.lifeExpectancy, deathResults.deathDate, currentTime.approximateYears, usedModelState]);
 
   const fallbackShare = (text: string) => {
     // Try to copy to clipboard
@@ -255,7 +690,20 @@ export default function App() {
     setCurrentTime(INITIAL_COUNTDOWN_TIME);
   }, []);
 
-  const handleSubmit = () => {
+  // Auto-load ML model when prediction mode changes to 'ml'
+  useEffect(() => {
+    if (predictionMode === 'ml' && mlStatus === 'idle') {
+      // Use requestIdleCallback for better performance on mobile
+      if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback(() => loadTFModel());
+      } else {
+        // Fallback for browsers without requestIdleCallback
+        setTimeout(() => loadTFModel(), 0);
+      }
+    }
+  }, [predictionMode, mlStatus, loadTFModel]);
+
+  const handleSubmit = async () => {
     // Calculate birth date
     const birthDate = new Date(
       parseInt(formData.birthYear),
@@ -275,112 +723,18 @@ export default function App() {
       currentAge--;
     }
     
-    // Get base life expectancy for country and sex
-    let baseLifeExpectancy = 78; // Global average fallback
-    const countryData = COUNTRY_LIFE_EXPECTANCY[formData.country];
-    if (countryData) {
-      baseLifeExpectancy = formData.sex === 'female' ? countryData.female : countryData.male;
-    } else {
-      // General adjustments if country not in list
-      if (formData.sex === 'female') baseLifeExpectancy += 4;
-    }
+    // Use computeExpectedYears helper function
+    const { years: totalLifeExpectancy, usedModel } = await computeExpectedYears(
+      formData,
+      predictionMode || 'rule',
+      COUNTRY_LIFE_EXPECTANCY,
+      currentAge,
+      calculatedBMI,
+      prepareModelInput,
+      predictWithModel
+    );
     
-    // Age-based adjustments (remaining life expectancy decreases with age)
-    const ageAdjustment = currentAge * 0.1; // Slight decrease per year of current age
-    baseLifeExpectancy -= ageAdjustment;
-    
-    // BMI adjustments based on medical research
-    if (calculatedBMI) {
-      if (calculatedBMI < 16) baseLifeExpectancy -= 8; // Severely underweight
-      else if (calculatedBMI < 18.5) baseLifeExpectancy -= 3; // Underweight
-      else if (calculatedBMI >= 18.5 && calculatedBMI < 25) baseLifeExpectancy += 2; // Normal
-      else if (calculatedBMI >= 25 && calculatedBMI < 30) baseLifeExpectancy -= 2; // Overweight
-      else if (calculatedBMI >= 30 && calculatedBMI < 35) baseLifeExpectancy -= 6; // Obese I
-      else if (calculatedBMI >= 35 && calculatedBMI < 40) baseLifeExpectancy -= 10; // Obese II
-      else if (calculatedBMI >= 40) baseLifeExpectancy -= 15; // Obese III
-    }
-    
-    // Smoking adjustments
-    if (formData.smoker) {
-      if (formData.sex === 'male') baseLifeExpectancy -= 13.2;
-      else baseLifeExpectancy -= 14.5; // Smoking affects women slightly more
-    }
-    
-    // Alcohol consumption adjustments
-    switch (formData.alcoholConsumption) {
-      case 'never':
-        baseLifeExpectancy += 0.5;
-        break;
-      case 'once-a-month':
-        baseLifeExpectancy += 1; // Light drinking can be beneficial
-        break;
-      case '2-4-times-per-month':
-        baseLifeExpectancy += 0.5;
-        break;
-      case '2-times-a-week':
-        baseLifeExpectancy -= 1;
-        break;
-      case 'daily':
-        baseLifeExpectancy -= 5;
-        break;
-      case 'constantly-blotto':
-        baseLifeExpectancy -= 15;
-        break;
-    }
-    
-    // Outlook/mental health adjustments
-    switch (formData.outlook) {
-      case 'optimistic':
-        baseLifeExpectancy += 2;
-        break;
-      case 'pessimistic':
-        baseLifeExpectancy -= 3;
-        break;
-      case 'neutral':
-        // No change
-        break;
-    }
-    
-    // Fitness level adjustments
-    if (formData.includeFitnessDiet) {
-      switch (formData.fitnessLevel) {
-        case 'ironman':
-          baseLifeExpectancy += 8;
-          break;
-        case 'very-active':
-          baseLifeExpectancy += 5;
-          break;
-        case 'moderately-active':
-          baseLifeExpectancy += 3;
-          break;
-        case 'couch-potato':
-          baseLifeExpectancy -= 4;
-          break;
-      }
-      
-      // Diet rating adjustments
-      switch (formData.dietRating) {
-        case 'excellent':
-          baseLifeExpectancy += 4;
-          break;
-        case 'good':
-          baseLifeExpectancy += 2;
-          break;
-        case 'ok':
-          baseLifeExpectancy += 0;
-          break;
-        case 'terrible':
-          baseLifeExpectancy -= 3;
-          break;
-      }
-    }
-    
-    // Add some realistic randomness (±2 years)
-    const randomFactor = (Math.random() - 0.5) * 4;
-    baseLifeExpectancy += randomFactor;
-    
-    // Calculate total life expectancy from current age
-    const totalLifeExpectancy = currentAge + Math.max(0, baseLifeExpectancy - currentAge);
+    setUsedModelState(usedModel);
     
     // Create death date
     const deathDate = new Date(birthDate);
@@ -546,15 +900,17 @@ return (
                 <p className="text-xs sm:text-sm text-gray-400 mb-2">Test taken: {deathResults.testDate}.</p>
                 <p className="text-base sm:text-lg font-semibold mb-2 text-white leading-relaxed">At time of testing you are {deathResults.currentAge} years, {deathResults.ageInMonths} months and {deathResults.ageInDays} days old.</p>
                 <p className="text-xs sm:text-sm text-gray-400 mb-4 sm:mb-6">Current age in: Days: ({deathResults.totalDaysLived.toLocaleString()}), Weeks: ({deathResults.totalWeeksLived.toLocaleString()}), Months: ({deathResults.totalMonthsLived})</p>
-                
+                <p className="text-xs sm:text-sm text-emerald-400 mb-4">
+                  Model: {modelDisplayName}
+                </p>
                 <p className="text-base sm:text-lg mb-4 text-gray-200 leading-relaxed">
                   Based on our calculations you will die on: <br className="sm:hidden"/><strong className="text-white break-words">{deathResults.deathDate}</strong>
                 </p>
                 
-                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mb-4 sm:mb-6">
+                <div className="flex flex-col sm:flex-row gap-3 sm:gap-3 mb-4 sm:mb-6">
                   <button 
                     onClick={handleInstagramShare}
-                    className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white px-4 sm:px-6 py-3 sm:py-2 rounded-lg sm:rounded text-sm sm:text-base font-medium transition-colors duration-200 shadow-lg relative overflow-hidden select-none transform-none active:scale-95 flex-1 sm:flex-none"
+                    className="bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white px-6 sm:px-6 py-4 sm:py-2 rounded-lg sm:rounded text-base sm:text-base font-medium transition-all duration-200 shadow-lg relative overflow-hidden select-none transform-none active:scale-95 flex-1 sm:flex-none touch-manipulation"
                     style={{
                       boxShadow: '0 0 20px rgba(168, 85, 247, 0.35), 0 0 40px rgba(236, 72, 153, 0.25), 0 0 60px rgba(251, 146, 60, 0.15)'
                     }}
@@ -562,7 +918,7 @@ return (
                     <span className="relative z-10">📱 Share on Instagram</span>
                     <div className="absolute inset-0 bg-gradient-to-r from-purple-400 via-pink-400 to-orange-300 opacity-0 hover:opacity-[0.15] active:opacity-[0.25] transition-opacity duration-200"></div>
                   </button>
-                  <button className="bg-gray-900 text-white px-4 sm:px-6 py-3 sm:py-2 rounded-lg sm:rounded text-sm sm:text-base font-medium hover:bg-black active:scale-95 transition-all duration-200 flex-1 sm:flex-none">📝 Post</button>
+                  <button className="bg-gray-900 text-white px-6 sm:px-6 py-4 sm:py-2 rounded-lg sm:rounded text-base sm:text-base font-medium hover:bg-black active:scale-95 transition-all duration-200 flex-1 sm:flex-none touch-manipulation">📝 Post</button>
                 </div>
                 
                 <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold mb-4 sm:mb-6 text-white leading-tight">You will live to be {deathResults.lifeExpectancy} old!</h2>
@@ -592,11 +948,11 @@ return (
               
               <div className="lg:ml-8 text-center">
                 <div className="bg-gray-700 border border-gray-600 p-4 sm:p-6 rounded-lg max-w-sm mx-auto lg:max-w-none">
-                  <p className="text-gray-400 italic mb-2 text-sm sm:text-base">In loving memory</p>
-                  <p className="text-gray-400 mb-2 text-sm sm:text-base">Taken from us on</p>
+                  <p className="text-gray-400 italic mb-2 text-base sm:text-base">In loving memory</p>
+                  <p className="text-gray-400 mb-2 text-base sm:text-base">Taken from us on</p>
                   <p className="text-base sm:text-lg font-semibold text-white">{deathResults.deathDate.split(',')[0]}</p>
                   <p className="text-base sm:text-lg font-semibold text-white break-words">{deathResults.deathDate.split(', ')[1]}</p>
-                  <p className="text-gray-400 italic mt-4 text-sm sm:text-base">rest in peace</p>
+                  <p className="text-gray-400 italic mt-4 text-base sm:text-base">rest in peace</p>
                   <div className="mt-4 text-green-400 text-lg sm:text-xl">🌱🪦🌱</div>
                 </div>
               </div>
@@ -658,13 +1014,13 @@ return (
           </div>
         ) : (
           <>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 lg:gap-8">
-          {/* Left Panel - Personal Information Form */}
-          <Card className="bg-gray-800 border border-gray-700 rounded-xl sm:rounded-2xl shadow-lg">
-            <CardContent className="p-4 sm:p-6 pt-6 sm:pt-10 space-y-4 sm:space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-6 lg:gap-8">
+          {/* Personal Information Form - Shows second on mobile, left on desktop */}
+          <Card className="bg-gray-800 border border-gray-700 rounded-xl sm:rounded-2xl shadow-lg order-2 lg:order-1">
+            <CardContent className="p-6 sm:p-6 pt-8 sm:pt-10 space-y-6 sm:space-y-6">
               {/* Date of Birth */}
               <div>
-                <Label className="mb-2 block text-sm font-medium text-gray-200">Date of Birth* <span className="text-xs text-gray-400">(mm/dd/yyyy)</span></Label>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Date of Birth* <span className="text-xs text-gray-400">(mm/dd/yyyy)</span></Label>
                 <div className="flex gap-1 sm:gap-2">
                   {/* Month (MM: 01-12) */}
                   <Select
@@ -673,7 +1029,7 @@ return (
                     open={openDropdown === 'birthMonth'}
                     onOpenChange={(open) => setOpenDropdown(open ? 'birthMonth' : null)}
                   >
-                  <SelectTrigger className="flex-1 h-12 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-sm sm:text-base">
+                  <SelectTrigger className="flex-1 h-14 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-base sm:text-base normal-case">
                     <SelectValue placeholder="mm" />
                   </SelectTrigger>
                     <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -696,7 +1052,7 @@ return (
                     open={openDropdown === 'birthDay'}
                     onOpenChange={(open) => setOpenDropdown(open ? 'birthDay' : null)}
                   >
-                  <SelectTrigger className="flex-1 h-12 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-sm sm:text-base">
+                  <SelectTrigger className="flex-1 h-14 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-base sm:text-base normal-case">
                     <SelectValue placeholder="dd" />
                   </SelectTrigger>
                     <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -719,7 +1075,7 @@ return (
                     open={openDropdown === 'birthYear'}
                     onOpenChange={(open) => setOpenDropdown(open ? 'birthYear' : null)}
                   >
-                  <SelectTrigger className="flex-1 h-12 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-sm sm:text-base">
+                  <SelectTrigger className="flex-1 h-14 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-base sm:text-base normal-case">
                     <SelectValue placeholder="yyyy" />
                   </SelectTrigger>
                     <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -735,14 +1091,14 @@ return (
 
               {/* Sex */}
               <div>
-                <Label className="mb-2 block text-sm font-medium text-gray-200">Sex*</Label>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Sex*</Label>
                 <Select
                   value={formData.sex}
                   onValueChange={(value) => setFormData({ ...formData, sex: value })}
                   open={openDropdown === 'sex'}
                   onOpenChange={(open) => setOpenDropdown(open ? 'sex' : null)}
                 >
-                  <SelectTrigger className="h-12 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-sm sm:text-base">
+                  <SelectTrigger className="h-14 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-base sm:text-base normal-case">
                     <SelectValue placeholder="Choose..." />
                   </SelectTrigger>
                   <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -755,7 +1111,7 @@ return (
 
               {/* Do you smoke */}
               <div>
-                <Label className="mb-2 block text-sm font-medium text-gray-200">Do you smoke?</Label>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Do you smoke?</Label>
                 <div className="flex items-center gap-2">
                   <Checkbox
                     id="smoker"
@@ -768,14 +1124,14 @@ return (
 
               {/* BMI */}
               <div>
-                <Label className="mb-2 block text-sm font-medium text-gray-200">BMI*</Label>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">BMI*</Label>
                 <Select
                   value={formData.bmi}
                   onValueChange={(value) => setFormData({ ...formData, bmi: value })}
                   open={openDropdown === 'bmi'}
                   onOpenChange={(open) => setOpenDropdown(open ? 'bmi' : null)}
                 >
-                  <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white">
+                  <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white normal-case">
                     <SelectValue placeholder="Under 25" />
                   </SelectTrigger>
                   <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -790,14 +1146,14 @@ return (
 
               {/* Outlook */}
               <div>
-                <Label className="mb-2 block text-sm font-medium text-gray-200">Outlook</Label>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Outlook</Label>
                 <Select
                   value={formData.outlook}
                   onValueChange={(value) => setFormData({ ...formData, outlook: value })}
                   open={openDropdown === 'outlook'}
                   onOpenChange={(open) => setOpenDropdown(open ? 'outlook' : null)}
                 >
-                  <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white">
+                  <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white normal-case">
                     <SelectValue placeholder="Choose..." />
                   </SelectTrigger>
                   <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -810,14 +1166,14 @@ return (
 
               {/* Alcohol Consumption */}
               <div>
-                <Label className="mb-2 block text-sm font-medium text-gray-200">Alcohol Consumption</Label>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Alcohol Consumption</Label>
                 <Select
                   value={formData.alcoholConsumption}
                   onValueChange={(value) => setFormData({ ...formData, alcoholConsumption: value })}
                   open={openDropdown === 'alcohol'}
                   onOpenChange={(open) => setOpenDropdown(open ? 'alcohol' : null)}
                 >
-                  <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white">
+                  <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white normal-case">
                     <SelectValue placeholder="Choose..." />
                   </SelectTrigger>
                   <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -833,14 +1189,14 @@ return (
 
               {/* Country */}
               <div>
-                <Label className="mb-2 block text-sm font-medium text-gray-200">Country*</Label>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Country*</Label>
                 <Select
                   value={formData.country}
                   onValueChange={(value) => setFormData({ ...formData, country: value })}
                   open={openDropdown === 'country'}
                   onOpenChange={(open) => setOpenDropdown(open ? 'country' : null)}
                 >
-                  <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white">
+                  <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white normal-case">
                     <SelectValue placeholder="Choose..." />
                   </SelectTrigger>
                   <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -1076,7 +1432,7 @@ return (
                     <SelectItem value="Uzbekistan">🇺🇿 Uzbekistan</SelectItem>
                     <SelectItem value="Vanuatu">🇻🇺 Vanuatu</SelectItem>
                     <SelectItem value="Venezuela">🇻🇪 Venezuela</SelectItem>
-                    <SelectItem value="Viet Nam">🇻🇳 Viet Nam</SelectItem>
+                    <SelectItem value="Vietnam">🇻🇳 Viet Nam</SelectItem>
                     <SelectItem value="Virgin Islands, British">🇻🇬 Virgin Islands, British</SelectItem>
                     <SelectItem value="Virgin Islands, U.S.">🇻🇮 Virgin Islands, U.S.</SelectItem>
                     <SelectItem value="Wallis and Futuna">🇼🇫 Wallis and Futuna</SelectItem>
@@ -1103,14 +1459,14 @@ return (
                 {formData.includeFitnessDiet && (
                   <div className="space-y-4">
                     <div>
-                      <Label className="mb-2 block text-sm font-medium text-gray-200">Level of Fitness</Label>
+                      <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Level of Fitness</Label>
                       <Select
                         value={formData.fitnessLevel}
                         onValueChange={(value) => setFormData({ ...formData, fitnessLevel: value })}
                         open={openDropdown === 'fitnessLevel'}
                         onOpenChange={(open) => setOpenDropdown(open ? 'fitnessLevel' : null)}
                       >
-                        <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white">
+                        <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white normal-case">
                           <SelectValue placeholder="Choose..." />
                         </SelectTrigger>
                         <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -1123,14 +1479,14 @@ return (
                     </div>
 
                     <div>
-                      <Label className="mb-2 block text-sm font-medium text-gray-200">Diet Rating</Label>
+                      <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Diet Rating</Label>
                       <Select
                         value={formData.dietRating}
                         onValueChange={(value) => setFormData({ ...formData, dietRating: value })}
                         open={openDropdown === 'dietRating'}
                         onOpenChange={(open) => setOpenDropdown(open ? 'dietRating' : null)}
                       >
-                        <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white">
+                        <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white normal-case">
                           <SelectValue placeholder="Choose..." />
                         </SelectTrigger>
                         <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -1145,23 +1501,45 @@ return (
                 )}
               </div>
 
+              {/* Prediction Mode */}
+              <div>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Prediction Mode</Label>
+                <Select
+                  value={predictionMode}
+                  onValueChange={(value) => setPredictionMode(value as PredictionMode)}
+                  open={openDropdown === 'predictionMode'}
+                  onOpenChange={(open) => setOpenDropdown(open ? 'predictionMode' : null)}
+                >
+                  <SelectTrigger className="h-10 rounded-lg bg-gray-700 border-gray-600 text-white normal-case">
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-gray-800 border border-gray-600 text-white">
+                    <SelectItem value="rule">Rule-based</SelectItem>
+                    <SelectItem value="who">WHO + Rules</SelectItem>
+                    <SelectItem value="ml">Machine Learning</SelectItem>
+                  </SelectContent>
+                </Select>
+                {/* ML Status Display */}
+                {mlStatusDisplay && (
+                  <div className="mt-2 text-xs">
+                    <span className={mlStatusDisplay.color}>{mlStatusDisplay.text}</span>
+                  </div>
+                )}
+              </div>
+
               {/* Submit Button */}
               <Button 
                 onClick={handleSubmit}
                 disabled={!isFormValid}
-                className={`w-full sm:w-40 h-12 sm:h-10 rounded-lg backdrop-blur-md border text-white transition-all duration-200 font-medium text-base sm:text-sm active:scale-95 ${
-                  isFormValid 
-                    ? 'animate-color-cycle hover:opacity-90 cursor-pointer' 
-                    : 'bg-gray-600 border-gray-500 cursor-not-allowed opacity-50'
-                }`}
+                className={`w-full sm:w-40 h-14 sm:h-10 rounded-lg backdrop-blur-md border text-white transition-all duration-200 font-medium text-base sm:text-sm active:scale-95 ${isFormValid ? 'animate-color-cycle hover:opacity-90 cursor-pointer' : 'bg-gray-600 border-gray-500 cursor-not-allowed opacity-50'}`}
               >
                 🚀 Submit
               </Button>
             </CardContent>
           </Card>
 
-          {/* Right Panel - BMI Calculator */}
-          <Card className="bg-gray-800 border border-gray-700 rounded-xl sm:rounded-2xl shadow-lg">
+          {/* BMI Calculator - Shows first on mobile, right on desktop */}
+          <Card className="bg-gray-800 border border-gray-700 rounded-xl sm:rounded-2xl shadow-lg order-1 lg:order-2">
             <CardHeader className="p-4 sm:p-6">
               <CardTitle className="text-gray-100 text-lg sm:text-xl">📊 BMI Calculator</CardTitle>
               <p className="text-xs sm:text-sm text-gray-400 leading-relaxed">Please select a measurement for your height and weight</p>
@@ -1169,7 +1547,7 @@ return (
             <CardContent className="space-y-4 sm:space-y-6 p-4 sm:p-6 pt-0 sm:pt-0">
               {/* Weight */}
               <div>
-                <Label className="mb-2 block text-sm font-medium text-gray-200">⚖️ Weight - Choose one</Label>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Weight - Choose one</Label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4">
                   <div>
                     <Label className="text-gray-400 text-sm mb-1 block">kg</Label>
@@ -1179,7 +1557,7 @@ return (
                       open={openDropdown === 'weightKilos'}
                       onOpenChange={(open) => setOpenDropdown(open ? 'weightKilos' : null)}
                     >
-                      <SelectTrigger className="h-12 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-sm sm:text-base">
+                      <SelectTrigger className="h-14 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-base sm:text-base normal-case">
                         <SelectValue placeholder="Select" />
                       </SelectTrigger>
                       <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -1199,7 +1577,7 @@ return (
                       open={openDropdown === 'weightPounds'}
                       onOpenChange={(open) => setOpenDropdown(open ? 'weightPounds' : null)}
                     >
-                      <SelectTrigger className="h-12 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-sm sm:text-base">
+                      <SelectTrigger className="h-14 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-base sm:text-base normal-case">
                         <SelectValue placeholder="Select" />
                       </SelectTrigger>
                       <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -1216,7 +1594,7 @@ return (
 
               {/* Height */}
               <div>
-                <Label className="mb-2 block text-sm font-medium text-gray-200">📏 Height - Choose one</Label>
+                <Label className="mb-3 block text-base sm:text-sm font-medium text-gray-200">Height - Choose one</Label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4">
                   <div>
                     <Label className="text-gray-400 text-sm mb-1 block">cm</Label>
@@ -1226,7 +1604,7 @@ return (
                       open={openDropdown === 'heightCm'}
                       onOpenChange={(open) => setOpenDropdown(open ? 'heightCm' : null)}
                     >
-                      <SelectTrigger className="h-12 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-sm sm:text-base">
+                      <SelectTrigger className="h-14 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-base sm:text-base normal-case">
                         <SelectValue placeholder="Select" />
                       </SelectTrigger>
                       <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -1246,7 +1624,7 @@ return (
                       open={openDropdown === 'heightInches'}
                       onOpenChange={(open) => setOpenDropdown(open ? 'heightInches' : null)}
                     >
-                      <SelectTrigger className="h-12 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-sm sm:text-base">
+                      <SelectTrigger className="h-14 sm:h-10 rounded-lg bg-gray-700 border-gray-600 text-white text-base sm:text-base normal-case">
                         <SelectValue placeholder="Select" />
                       </SelectTrigger>
                       <SelectContent className="bg-gray-800 border border-gray-600 text-white">
@@ -1264,7 +1642,7 @@ return (
               {/* Calculate Button */}
               <Button
                 onClick={calculateBMI}
-                className="w-full sm:w-auto h-12 sm:h-10 rounded-lg backdrop-blur-md border text-white animate-color-cycle transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed font-medium text-base sm:text-sm active:scale-95"
+                className="w-full sm:w-auto h-14 sm:h-10 rounded-lg backdrop-blur-md border text-white animate-color-cycle transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed font-medium text-base sm:text-sm active:scale-95"
                 disabled={!bmiData.weightValue || !bmiData.heightValue}
               >
                 🧮 Calculate
@@ -1323,7 +1701,7 @@ return (
           <div className="bg-gray-800/50 rounded-lg p-4 sm:p-6 space-y-3">
             <p className="leading-relaxed">
               🏃‍♂️ As your BMI is a good indication of a healthy lifestyle it has the biggest effect on your prediction. It is never too late to adapt to healthy living,
-              a diet intake that balances you over physical excersion is the key to your health goal.
+              a diet intake that balances you over physical exertion is the key to your health goal.
             </p>
             <p className="leading-relaxed">
               🐹 Ready? Hit submit and our hamster AI will spin up their wheels and report your personalised death clock so you can make a note in your diary.

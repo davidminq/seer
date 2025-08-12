@@ -77,3 +77,24 @@ html, body {
 .animate-color-cycle {
   animation: colorCycle 3s ease-in-out infinite;
 }
+
+/* Force normal case for all select components and their children */
+[data-select-trigger], 
+[data-select-content], 
+[data-select-trigger] *, 
+[data-select-content] *,
+.select-trigger,
+.select-value,
+.select-content,
+.select-item,
+button[data-select-trigger],
+button[data-select-trigger] *,
+span.normal-case {
+  text-transform: none !important;
+}
+
+/* Additional specificity for select values */
+button[data-select-trigger] span,
+div[data-select-content] div {
+  text-transform: none !important;
+}

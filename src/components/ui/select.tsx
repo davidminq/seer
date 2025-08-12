@@ -5,9 +5,44 @@ interface SelectContextValue {
   onValueChange?: (value: string) => void
   open: boolean
   onOpenChange: (open: boolean) => void
+  valueLabels: Record<string, string>
+  setValueLabel: (value: string, label: string) => void
 }
 
 const SelectContext = React.createContext<SelectContextValue | undefined>(undefined)
+
+// Common label mappings to avoid timing issues
+const COMMON_LABEL_MAPPINGS: Record<string, string> = {
+  // Gender
+  'male': 'Male',
+  'female': 'Female',
+  'other': 'Other',
+  
+  // Outlook
+  'optimistic': 'Optimistic',
+  'pessimistic': 'Pessimistic',
+  'neutral': 'Neutral',
+  
+  // Alcohol
+  'never': 'Never',
+  'once-a-month': 'Once a Month',
+  '2-4-times-per-month': '2-4 Times Per Month',
+  '2-times-a-week': '2 Times A Week',
+  'daily': 'Daily',
+  'constantly-blotto': "I'm Constantly Blotto",
+  
+  // Prediction Mode
+  'rule': 'Rule-based',
+  'who': 'WHO + Rules',
+  'ml': 'Machine Learning (TF.js)',
+  
+  // BMI
+  'under18.5': 'Under 18.5',
+  '18.5-24.9': '18.5 - 24.9',
+  '25-29.9': '25 - 29.9',
+  '30-34.9': '30 - 34.9',
+  '35+': '35+'
+}
 
 const Select = React.forwardRef<
   HTMLDivElement,
@@ -20,12 +55,17 @@ const Select = React.forwardRef<
   }
 >(({ value, onValueChange, children, open: controlledOpen, onOpenChange: controlledOnOpenChange }, ref) => {
   const [internalOpen, setInternalOpen] = React.useState(false)
+  const [valueLabels, setValueLabels] = React.useState<Record<string, string>>(COMMON_LABEL_MAPPINGS)
   
   const open = controlledOpen !== undefined ? controlledOpen : internalOpen
   const onOpenChange = controlledOnOpenChange || setInternalOpen
+  
+  const setValueLabel = React.useCallback((value: string, label: string) => {
+    setValueLabels(prev => ({ ...prev, [value]: label }))
+  }, [])
 
   return (
-    <SelectContext.Provider value={{ value, onValueChange, open, onOpenChange }}>
+    <SelectContext.Provider value={{ value, onValueChange, open, onOpenChange, valueLabels, setValueLabel }}>
       <div ref={ref} className="relative">
         {children}
       </div>
@@ -47,7 +87,8 @@ const SelectTrigger = React.forwardRef<
     <button
       ref={ref}
       type="button"
-      className={`flex h-10 w-full items-center justify-between rounded-md border border-gray-600 bg-gray-700 text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50 appearance-none ${className || ''}`}
+      className={`flex h-10 w-full items-center justify-between rounded-md border border-gray-600 bg-gray-700 text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50 appearance-none normal-case ${className || ''}`}
+      style={{ textTransform: 'none' }}
       data-select-trigger
       onClick={() => context.onOpenChange(!context.open)}
       {...props}
@@ -80,9 +121,14 @@ const SelectValue = React.forwardRef<
   const context = React.useContext(SelectContext)
   if (!context) throw new Error("SelectValue must be used within a Select")
 
+  const displayValue = context.value 
+    ? (context.valueLabels[context.value] || COMMON_LABEL_MAPPINGS[context.value] || context.value) 
+    : placeholder
+  
+  
   return (
-    <span ref={ref} className={className} {...props}>
-      {context.value || placeholder}
+    <span ref={ref} className={`normal-case ${className || ''}`} style={{ textTransform: 'none' }} {...props}>
+      {displayValue}
     </span>
   )
 })
@@ -102,7 +148,8 @@ const SelectContent = React.forwardRef<
   return (
     <div
       ref={ref}
-      className={`absolute z-50 min-w-[8rem] overflow-hidden rounded-md border border-gray-600 bg-gray-800 text-white p-1 shadow-md animate-in fade-in-0 zoom-in-95 top-full mt-1 max-h-60 overflow-y-auto ${className || ''}`}
+      className={`absolute z-50 min-w-[8rem] overflow-hidden rounded-md border border-gray-600 bg-gray-800 text-white p-1 shadow-md animate-in fade-in-0 zoom-in-95 top-full mt-1 max-h-60 overflow-y-auto normal-case ${className || ''}`}
+      style={{ textTransform: 'none' }}
       data-select-content
       {...props}
     >
@@ -121,11 +168,19 @@ const SelectItem = React.forwardRef<
 >(({ className, children, value, ...props }, ref) => {
   const context = React.useContext(SelectContext)
   if (!context) throw new Error("SelectItem must be used within a Select")
+  
+  // Register the label for this value
+  React.useEffect(() => {
+    if (typeof children === 'string') {
+      context.setValueLabel(value, children)
+    }
+  }, [value, children, context])
 
   return (
     <div
       ref={ref}
       className={`relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm normal-case outline-none hover:bg-gray-700 focus:bg-gray-700 ${className || ''}`}
+      style={{ textTransform: 'none' }}
       onClick={() => {
         context.onValueChange?.(value)
         context.onOpenChange(false)
