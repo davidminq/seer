@@ -260,12 +260,27 @@ async function computeExpectedYears(
       // Use TensorFlow.js model prediction
       const modelInput = prepareModelInput(formData, currentAge, calculatedBMI);
       const prediction = await predictWithModel(modelInput);
-      if (prediction !== null) {
-        baseLifeExpectancy = prediction;
-        usedModel = 'ml';
-      } else {
+      if (prediction === null) {
         throw new Error('Model prediction returned null');
       }
+      
+      // prediction 수신 후
+      if (!Number.isFinite(prediction)) throw new Error('Invalid ML: non-finite');
+
+      // 1차 클램프: 최소/최대 물리적 한계
+      let clamped = Math.max(0, Math.min(120, prediction));
+
+      // 2차 클램프: "오늘/즉시 사망" 방지 — 최소 여유 5년 보장
+      const minAllowed = currentAge + 5;
+      if (clamped < minAllowed) clamped = minAllowed;
+
+      // 최종 유효성 재확인
+      if (clamped <= currentAge || clamped > 120) {
+        throw new Error('Invalid ML after clamp');
+      }
+
+      baseLifeExpectancy = clamped;
+      usedModel = 'ml';
     } catch (error) {
       console.error('ML prediction failed, falling back to WHO method:', error);
       // Fallback to WHO method if ML fails
@@ -381,7 +396,9 @@ async function computeExpectedYears(
 }
 
 // TensorFlow.js model URL constant
-const TFJS_MODEL_URL = '/seer/model/model.json';
+const TFJS_MODEL_URL = '/model/model.json';
+
+const USE_INPUT_SCALING = false as const; // 쉽게 on/off 가능
 
 export default function App() {
   const [formData, setFormData] = useState<FormData>(INITIAL_FORM_DATA);
@@ -452,7 +469,7 @@ export default function App() {
       }
     })();
     
-    const bmiToUse = calculatedBMI || bmiFromCategory || 22;
+    const bmiToUse = (Number.isFinite(calculatedBMI) ? calculatedBMI : bmiFromCategory) || 22;
     
     const alcoholLevel = (() => {
       switch (formData.alcoholConsumption) {
@@ -509,6 +526,21 @@ export default function App() {
     };
   }, []);
 
+  function normalizeModelInput(x: ModelInput): number[] {
+    // 범위 가정:
+    // age: 0~120, sex: 0/1, bmi: 0~60, smoker: 0/1,
+    // alcoholLevel: 0~5, outlookLevel: 0~2, fitnessLevel: 0~3, dietLevel: 0~3
+    const age = Math.max(0, Math.min(120, x.age)) / 120;
+    const sex = x.sex === 1 ? 1 : 0;
+    const bmi = Math.max(0, Math.min(60, x.bmi)) / 60;
+    const smoker = x.smoker ? 1 : 0;
+    const alcohol = Math.max(0, Math.min(5, x.alcoholLevel)) / 5;
+    const outlook = Math.max(0, Math.min(2, x.outlookLevel)) / 2;
+    const fitness = Math.max(0, Math.min(3, x.fitnessLevel)) / 3;
+    const diet = Math.max(0, Math.min(3, x.dietLevel)) / 3;
+    return [age, sex, bmi, smoker, alcohol, outlook, fitness, diet];
+  }
+
   // Predict with TensorFlow.js model
   const predictWithModel = useCallback(async (modelInput: ModelInput): Promise<number | null> => {
     try {
@@ -518,7 +550,7 @@ export default function App() {
       const tf = await import('@tensorflow/tfjs');
       
       // Create input tensor
-      const inputTensor = tf.tensor2d([[
+      const features = USE_INPUT_SCALING ? normalizeModelInput(modelInput) : [
         modelInput.age,
         modelInput.sex,
         modelInput.bmi,
@@ -527,7 +559,9 @@ export default function App() {
         modelInput.outlookLevel,
         modelInput.fitnessLevel,
         modelInput.dietLevel
-      ]]);
+      ];
+      console.log('features', USE_INPUT_SCALING ? 'scaled' : 'raw', features);
+      const inputTensor = tf.tensor2d([features]);
       
       // Make prediction
       const prediction = model.predict(inputTensor) as any;
@@ -538,7 +572,11 @@ export default function App() {
       prediction.dispose();
       
       // Return predicted life expectancy
-      return result[0];
+      const pred = result[0];
+      if (!Number.isFinite(pred)) {
+        return null;
+      }
+      return pred;
     } catch (error) {
       console.error('Model prediction failed:', error);
       return null;
@@ -569,19 +607,85 @@ export default function App() {
     setCalculatedBMI(Math.round(bmi * 10) / 10);
   }, [bmiData]);
 
-  // Memoize form validation
+  // Memoize form validation (allow either BMI bucket OR calculated BMI)
   const isFormValid = useMemo(() => {
-    return (
-      formData.birthDay &&
-      formData.birthMonth &&
-      formData.birthYear &&
-      formData.sex &&
-      formData.bmi &&
-      formData.outlook &&
-      formData.alcoholConsumption &&
-      formData.country
+    // Basic field validation (BMI bucket now optional if calculatedBMI exists)
+    if (!formData.birthDay || !formData.birthMonth || !formData.birthYear || 
+        !formData.sex || !formData.outlook || 
+        !formData.alcoholConsumption || !formData.country) {
+      return false;
+    }
+
+    // Must have either a selected BMI range or a computed BMI value
+    const hasSomeBMI = Boolean(formData.bmi) || Number.isFinite(calculatedBMI);
+    if (!hasSomeBMI) return false;
+
+    // Date validation
+    const day = parseInt(formData.birthDay);
+    const month = parseInt(formData.birthMonth);
+    const year = parseInt(formData.birthYear);
+
+    // Check if date values are valid numbers
+    if (isNaN(day) || isNaN(month) || isNaN(year)) {
+      return false;
+    }
+
+    // Create a date and check if it's valid
+    const birthDate = new Date(year, month - 1, day);
+    const isValidDate = birthDate.getFullYear() === year && 
+                       birthDate.getMonth() === month - 1 && 
+                       birthDate.getDate() === day;
+
+    if (!isValidDate) {
+      return false;
+    }
+
+    // Check if birth date is not in the future
+    const today = new Date();
+    if (birthDate > today) {
+      return false;
+    }
+
+    // Check reasonable age limits (not older than 150 years)
+    const age = today.getFullYear() - birthDate.getFullYear();
+    if (age > 150) {
+      return false;
+    }
+
+    return true;
+  }, [formData, calculatedBMI]);
+
+  // Human-friendly reason for disabled submit (used for UX hint)
+  const validationMessage = useMemo(() => {
+    if (!formData.birthMonth || !formData.birthDay || !formData.birthYear) return 'Enter a valid birth date.';
+
+    const day = parseInt(formData.birthDay);
+    const month = parseInt(formData.birthMonth);
+    const year = parseInt(formData.birthYear);
+    const birthDate = new Date(year, month - 1, day);
+
+    const isValidDate = (
+      !isNaN(day) && !isNaN(month) && !isNaN(year) &&
+      birthDate.getFullYear() === year &&
+      birthDate.getMonth() === month - 1 &&
+      birthDate.getDate() === day
     );
-  }, [formData]);
+    if (!isValidDate) return 'Birth date is invalid (check month/day/year and leap years).';
+
+    if (birthDate > new Date()) return 'Birth date cannot be in the future.';
+
+    const age = new Date().getFullYear() - year;
+    if (age > 150) return 'Age over limit (150).';
+
+    if (!formData.sex) return 'Select sex.';
+    if (!formData.country) return 'Select country.';
+    if (!formData.outlook) return 'Select outlook.';
+    if (!formData.alcoholConsumption) return 'Select alcohol consumption.';
+
+    if (!formData.bmi && !Number.isFinite(calculatedBMI)) return 'Pick a BMI range or use the BMI calculator to compute one.';
+
+    return '';
+  }, [formData, calculatedBMI]);
 
   // Memoize years array
   const years = useMemo(() => {
@@ -609,12 +713,14 @@ export default function App() {
     if (predictionMode !== 'ml') return null;
     
     switch (mlStatus) {
+      case 'idle':
+        return { text: 'Initializing ML model…', color: 'text-gray-400' };
       case 'loading':
         return { text: 'Loading ML model…', color: 'text-blue-400' };
       case 'ready':
         return { text: 'ML model ready ✅', color: 'text-green-400' };
       case 'error':
-        return { text: 'Falling back to WHO rules.', color: 'text-orange-400' };
+        return { text: 'ML unavailable, using WHO method', color: 'text-orange-400' };
       default:
         return null;
     }
@@ -690,15 +796,29 @@ export default function App() {
     setCurrentTime(INITIAL_COUNTDOWN_TIME);
   }, []);
 
+  // Reset ML status when switching away from ML mode
+  useEffect(() => {
+    if (predictionMode !== 'ml') {
+      setMlStatus('idle');
+    }
+  }, [predictionMode]);
+
   // Auto-load ML model when prediction mode changes to 'ml'
   useEffect(() => {
     if (predictionMode === 'ml' && mlStatus === 'idle') {
+      console.log('Starting ML model load...');
       // Use requestIdleCallback for better performance on mobile
       if (typeof requestIdleCallback !== 'undefined') {
-        requestIdleCallback(() => loadTFModel());
+        requestIdleCallback(() => {
+          console.log('Loading model via requestIdleCallback');
+          loadTFModel();
+        });
       } else {
         // Fallback for browsers without requestIdleCallback
-        setTimeout(() => loadTFModel(), 0);
+        setTimeout(() => {
+          console.log('Loading model via setTimeout');
+          loadTFModel();
+        }, 0);
       }
     }
   }, [predictionMode, mlStatus, loadTFModel]);
@@ -726,7 +846,7 @@ export default function App() {
     // Use computeExpectedYears helper function
     const { years: totalLifeExpectancy, usedModel } = await computeExpectedYears(
       formData,
-      predictionMode || 'rule',
+      predictionMode,
       COUNTRY_LIFE_EXPECTANCY,
       currentAge,
       calculatedBMI,
@@ -1535,6 +1655,9 @@ return (
               >
                 🚀 Submit
               </Button>
+              {!isFormValid && validationMessage && (
+                <p className="mt-2 text-xs text-orange-300">{validationMessage}</p>
+              )}
             </CardContent>
           </Card>
 
